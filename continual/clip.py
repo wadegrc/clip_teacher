@@ -1,5 +1,5 @@
 import os.path as osp
-
+from tqdm import *
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
@@ -108,6 +108,16 @@ CUSTOM_TEMPLATES = {
     'SVHN':'a photo of a {}'
 }
 
+def article(name):
+  return 'an' if name[0] in 'aeiou' else 'a'
+
+def processed_name(name, rm_dot=False):
+  # _ for lvis
+  # / for obj365
+  res = name.replace('_', ' ').replace('/', ' or ').lower()
+  if rm_dot:
+    res = res.rstrip('.')
+  return res
 
 def load_clip_to_cpu():
     #backbone_name = cfg.MODEL.BACKBONE.NAME
@@ -188,14 +198,12 @@ class CustomCLIP(nn.Module):
                         template.format(processed_name(category['name'], rm_dot=True),
                         article=article(category['name']))
                         for template in templates]
-                if FLAGS.this_is:
-                    texts = [
-                             'This is ' + text if text.startswith('a') or text.startswith('the') else text 
+                texts = [
+                            'This is ' + text if text.startswith('a') or text.startswith('the') else text 
                             for text in texts
-                            ]
+                        ]
                 texts = clip.tokenize(texts) #tokenize
-                if run_on_gpu:
-                    texts = texts.cuda()
+                #texts = texts.to("cuda")
                 text_embeddings = self.text_encoder(texts) #embed with text encoder
                 text_embeddings /= text_embeddings.norm(dim=-1, keepdim=True)
                 text_embedding = text_embeddings.mean(dim=0)
@@ -203,5 +211,5 @@ class CustomCLIP(nn.Module):
                 all_text_embeddings.append(text_embedding)
             all_text_embeddings = torch.stack(all_text_embeddings, dim=1)
             if run_on_gpu:
-            all_text_embeddings = all_text_embeddings.cuda()
+                all_text_embeddings = all_text_embeddings.cuda()
         return all_text_embeddings.cpu().numpy().T

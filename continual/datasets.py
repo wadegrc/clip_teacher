@@ -108,7 +108,7 @@ def build_dataset(is_train, args):
     )
     nb_classes = scenario.nb_classes
     if is_train:
-        return dataset.dataset.classes
+        return scenario, nb_classes, dataset.dataset.classes
 
     return scenario, nb_classes
 

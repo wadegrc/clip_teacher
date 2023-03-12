@@ -171,7 +171,6 @@ def forward(samples, targets, model, teacher_model, criterion, lam, args):
     else:
         main_output = outputs
     loss = criterion(main_output, targets)
-    
     if teacher_model is not None:
         with torch.no_grad():
             main_output_old = None

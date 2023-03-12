@@ -36,7 +36,6 @@ from continual.losses import bce_with_logits, soft_bce_with_logits
 from continual.clip import load_clip_to_cpu 
 warnings.filterwarnings("ignore")
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "3"
 
 def get_args_parser():
     parser = argparse.ArgumentParser('DyTox training and evaluation script', add_help=False)
@@ -339,17 +338,17 @@ def main(args):
 
     cudnn.benchmark = True
 
-    scenario_train, args.nb_classes, categories_name = build_dataset(is_train=True, args=args)
+    scenario_train, args.nb_classes, category_names = build_dataset(is_train=True, args=args)
     scenario_val, _ = build_dataset(is_train=False, args=args)
 
     mixup_fn = None
     mixup_active = args.mixup > 0 or args.cutmix > 0. or args.cutmix_minmax is not None
 
     model = factory.get_backbone(args)
-    model.head = Classifier(
-        model.embed_dim, args.nb_classes, args.initial_increment,
-        args.increment, len(scenario_train)
-    )
+    #model.head = Classifier(
+    #    model.embed_dim, args.nb_classes, args.initial_increment,
+    #    args.increment, len(scenario_train)
+    #)
     model.to(device)
     # model will be on multiple GPUs, while model_without_ddp on a single GPU, but
     # it's actually the same model.
@@ -413,6 +412,7 @@ def main(args):
     teacher_model.freeze()
     teacher_model.eval()
     #teacher_model = None
+    print (next (teacher_model.parameters ()).device)
     output_dir = Path(args.output_dir)
 
     memory = None
@@ -495,9 +495,9 @@ def main(args):
 
         # ----------------------------------------------------------------------
         # Adding new parameters to handle the new classes
-        print("Adding new parameters")
-        if task_id > 0 and not args.dytox:
-            model_without_ddp.head.add_classes()
+        #print("Adding new parameters")
+        #if task_id > 0 and not args.dytox:
+        #    model_without_ddp.head.add_classes()
 
         #if task_id > 0:
             #model_without_ddp.freeze(args.freeze_task)
@@ -513,8 +513,15 @@ def main(args):
         # ----------------------------------------------------------------------
         # Data
         loader_train, loader_val = factory.get_loaders(dataset_train, dataset_val, args)
+        #class_order = dataset_train.class_order
+        categories = [{'name': item, 'id': idx+1,} for idx, item in enumerate(category_names[:(task_id+1)*10])]
+        category_indices = {cat['id']: cat for cat in categories}
+
         # ----------------------------------------------------------------------
-        
+        # text_feature
+        text_features = teacher_model.build_text_embedding(categories)
+        model_without_ddp.text_features = torch.Tensor(text_features).to(device)
+        model_without_ddp.to(device)
         # ----------------------------------------------------------------------
         # Learning rate and optimizer
         if task_id > 0 and args.incremental_batch_size:
@@ -714,7 +721,7 @@ def main(args):
             if args.finetuning_resetclf:
                 model_without_ddp.reset_classifier()
 
-            model_without_ddp.freeze(args.freeze_ft)
+            #model_without_ddp.freeze(args.freeze_ft)
 
             if args.distributed:
                 del model

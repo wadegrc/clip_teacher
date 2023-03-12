@@ -188,15 +188,15 @@ class ResNet(AbstractCNN):
 
         #self.fc = nn.Linear(512 * block.expansion, num_classes)
         self.embed_dim = 512 * block.expansion
-        self.head = None
-
+        #self.head = None
+        self.text_features = None
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
             elif isinstance(m, (nn.BatchNorm2d, nn.GroupNorm)):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
-
+        self.norm = nn.LayerNorm(self.embed_dim)
         # Zero-initialize the last BN in each residual branch,
         # so that the residual branch starts with zeros, and each residual block behaves like an identity.
         # This improves the model by 0.2~0.3% according to https://arxiv.org/abs/1706.02677
@@ -251,6 +251,7 @@ class ResNet(AbstractCNN):
 
     def _forward_impl(self, x: Tensor) -> Tensor:
         # See note [TorchScript super()]
+        output = dict()
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)
@@ -263,10 +264,14 @@ class ResNet(AbstractCNN):
 
         x = self.avgpool(x)
         x = torch.flatten(x, 1)
-        
-        x = self.head(x)
+        x = self.norm(x)
+        output['feature'] = x
+        #x = torch.dot(x.contiguous().view(-1), self.text_features.contiguous().view(-1))
+        x = torch.mm(x, self.text_features.T)
+        output['logits'] = x
+        #x = self.head(x)
 
-        return x
+        return output
 
     def forward(self, x: Tensor) -> Tensor:
         return self._forward_impl(x)
