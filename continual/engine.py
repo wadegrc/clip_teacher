@@ -180,7 +180,6 @@ def forward(samples, targets, model, teacher_model, criterion, lam, args):
             main_output_old = teacher_outputs['logits']
         else:
             main_output_old = teacher_outputs
-
     kd_loss = None
     if teacher_model is not None:
         #logits_for_distil = main_output[:, :main_output_old.shape[1]]
@@ -194,10 +193,11 @@ def forward(samples, targets, model, teacher_model, criterion, lam, args):
             
             #lbd = main_output_old.shape[1] / main_output.shape[1]
             lbd = 0.5
-            loss = (1 - lbd) * loss
+            #loss = (1 - lbd) * loss
             kd_factor = lbd
 
-            tau = args.distillation_tau
+            #tau = args.distillation_tau
+            tau = 2
 
             _kd_loss = F.kl_div(
                     F.log_softmax(logits_for_distil / tau, dim=1),
@@ -205,6 +205,7 @@ def forward(samples, targets, model, teacher_model, criterion, lam, args):
                     reduction='mean',
                     log_target=True
             ) * (tau ** 2)
+            
             #_kd_loss = _KD_loss(logits_for_distil, main_output_old, tau)
             kd_loss += kd_factor * _kd_loss
         elif args.kd > 0.:

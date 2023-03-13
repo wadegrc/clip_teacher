@@ -41,8 +41,8 @@ def get_args_parser():
     parser = argparse.ArgumentParser('DyTox training and evaluation script', add_help=False)
     parser.add_argument('--batch-size', default=128, type=int)
     parser.add_argument('--incremental-batch-size', default=None, type=int)
-    parser.add_argument('--epochs', default=80, type=int)
-    parser.add_argument('--base-epochs', default=80, type=int,
+    parser.add_argument('--epochs', default=100, type=int)
+    parser.add_argument('--base-epochs', default=100, type=int,
                         help='Number of epochs for base task')
     parser.add_argument('--no-amp', default=False, action='store_true',
                         help='Disable mixed precision')
@@ -340,7 +340,8 @@ def main(args):
 
     scenario_train, args.nb_classes, category_names = build_dataset(is_train=True, args=args)
     scenario_val, _ = build_dataset(is_train=False, args=args)
-
+    category_names = np.array(category_names)[args.class_order].tolist()
+    
     mixup_fn = None
     mixup_active = args.mixup > 0 or args.cutmix > 0. or args.cutmix_minmax is not None
 
@@ -412,7 +413,14 @@ def main(args):
     teacher_model.freeze()
     teacher_model.eval()
     #teacher_model = None
-    print (next (teacher_model.parameters ()).device)
+    
+     #class_order = dataset_train.class_order
+    categories = [{'name': item, 'id': idx+1,} for idx, item in enumerate(category_names)]
+    category_indices = {cat['id']: cat for cat in categories}
+    # ----------------------------------------------------------------------
+    # text_feature
+    text_features = teacher_model.build_text_embedding(categories[0:10])
+    #print (next (teacher_model.parameters ()).device)
     output_dir = Path(args.output_dir)
 
     memory = None
@@ -513,14 +521,7 @@ def main(args):
         # ----------------------------------------------------------------------
         # Data
         loader_train, loader_val = factory.get_loaders(dataset_train, dataset_val, args)
-        #class_order = dataset_train.class_order
-        categories = [{'name': item, 'id': idx+1,} for idx, item in enumerate(category_names[:(task_id+1)*10])]
-        category_indices = {cat['id']: cat for cat in categories}
-
-        # ----------------------------------------------------------------------
-        # text_feature
-        text_features = teacher_model.build_text_embedding(categories)
-        model_without_ddp.text_features = torch.Tensor(text_features).to(device)
+        model_without_ddp.text_features = torch.Tensor(text_features[:(task_id+1)*10]).to(device)
         model_without_ddp.to(device)
         # ----------------------------------------------------------------------
         # Learning rate and optimizer
@@ -809,7 +810,7 @@ if __name__ == '__main__':
         name = load_options(args, args.options)
         if not args.name:
             args.name = name
-
+    print(args.options)
     args.log_dir = os.path.join(
         args.log_path, args.data_set.lower(), args.log_category,
         datetime.datetime.now().strftime('%y-%m'),

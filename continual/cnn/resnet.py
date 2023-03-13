@@ -258,11 +258,16 @@ class ResNet(AbstractCNN):
         x = self.maxpool(x)
 
         x = F.relu(self.layer1(x), inplace=True)
+        print(x.shape)
         x = F.relu(self.layer2(x), inplace=True)
+        print(x.shape)
         x = F.relu(self.layer3(x), inplace=True)
+        print(x.shape)
         x = F.relu(self.layer4(x), inplace=True)
 
+        print(x.shape)
         x = self.avgpool(x)
+        print(x.shape)
         x = torch.flatten(x, 1)
         x = self.norm(x)
         output['feature'] = x

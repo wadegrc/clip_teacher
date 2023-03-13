@@ -4,7 +4,7 @@
 
 # Model definition
 #model: convit
-model: resnet34
+model: resnet18
 embed_dim: 384
 depth: 6
 num_heads: 12
@@ -18,10 +18,10 @@ no_amp: true
 eval_every: 10
 
 # Base hyperparameter
-weight_decay: 0.000001
+weight_decay: 0.00001
 batch_size: 32
 incremental_batch_size: 32
-incremental_lr: 0.001
+incremental_lr: 0.01
 rehearsal: icarl_all
 
 # Knowledge Distillation
