@@ -7,16 +7,20 @@ import json
 import os
 import math
 from typing import Iterable, Optional
-
+import matplotlib.colors as mcolors
 import torch
 from timm.data import Mixup
 from timm.utils import accuracy
 from timm.loss import SoftTargetCrossEntropy
 from torch.nn import functional as F
-
+from continual.coral import coral
 import continual.utils as utils
 from continual.losses import DistillationLoss
 from continual.pod import pod_loss
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn import manifold
+from glob import glob
 
 
 CE = SoftTargetCrossEntropy()
@@ -27,6 +31,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
                     device: torch.device, epoch: int, task_id: int, loss_scaler, max_norm: float = 0,
                     mixup_fn: Optional[Mixup] = None,
                     set_training_mode=True, debug=False, args=None,
+                    self_teacher_model: torch.nn.Module = None,
                     teacher_model: torch.nn.Module = None,
                     model_without_ddp: torch.nn.Module = None,
                     sam: torch.optim.Optimizer = None,
@@ -56,10 +61,10 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
             x, y, _ = loader_memory.get()
             x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
             with torch.cuda.amp.autocast(enabled=not args.no_amp):
-                loss_tuple = forward(x, y, model, teacher_model, criterion, lam, args)
+                loss_tuple = forward(x, y, model, self_teacher_model, teacher_model, criterion, lam, args)
         else:
             with torch.cuda.amp.autocast(enabled=not args.no_amp):
-                loss_tuple = forward(samples, targets, model, teacher_model, criterion, lam, args)
+                loss_tuple = forward(samples, targets, model, self_teacher_model, teacher_model, criterion, lam, args)
 
         loss = sum(filter(lambda x: x is not None, loss_tuple))
         internal_losses = model_without_ddp.get_internal_losses(loss)
@@ -94,7 +99,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
                 look_sam_update = True
 
                 with torch.cuda.amp.autocast(enabled=not args.no_amp):
-                    loss_tuple = forward(samples, targets, model, teacher_model, criterion, lam, args)
+                    loss_tuple = forward(samples, targets, model,self_teacher_model, teacher_model, criterion, lam, args)
                 loss = sum(filter(lambda x: x is not None, loss_tuple))
                 internal_losses = model_without_ddp.get_internal_losses(loss)
                 for internal_loss_value in internal_losses.values():
@@ -116,10 +121,10 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
                 x, y, _ = loader_memory.get()
                 x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
                 with torch.cuda.amp.autocast(enabled=not args.no_amp):
-                    loss_tuple = forward(x, y, model, teacher_model, criterion, lam, args)
+                    loss_tuple = forward(x, y, model,self_teacher_model, teacher_model, criterion, lam, args)
             else:
                 with torch.cuda.amp.autocast(enabled=not args.no_amp):
-                    loss_tuple = forward(samples, targets, model, teacher_model, criterion, lam, args)
+                    loss_tuple = forward(samples, targets, model,self_teacher_model, teacher_model, criterion, lam, args)
 
             loss = sum(filter(lambda x: x is not None, loss_tuple))
             internal_losses = model_without_ddp.get_internal_losses(loss)
@@ -161,7 +166,7 @@ def check_loss(loss):
         raise Exception('Loss is {}, stopping training'.format(loss.item()))
 
 
-def forward(samples, targets, model, teacher_model, criterion, lam, args):
+def forward(samples, targets, model,self_teacher_model, teacher_model, criterion, lam, args):
     main_output, div_output = None, None
 
     outputs = model(samples)
@@ -181,9 +186,10 @@ def forward(samples, targets, model, teacher_model, criterion, lam, args):
         else:
             main_output_old = teacher_outputs
     kd_loss = None
+    kd_loss = 0.
     if teacher_model is not None:
         #logits_for_distil = main_output[:, :main_output_old.shape[1]]
-        logits_for_distil = outputs['feature']
+        logits_for_distil = outputs['logits']
         kd_loss = 0.
         if args.auto_kd:
             # Knowledge distillation on the probabilities
@@ -192,8 +198,8 @@ def forward(samples, targets, model, teacher_model, criterion, lam, args):
             # This is strongly inspired by WA (CVPR 2020) --> https://arxiv.org/abs/1911.07053
             
             #lbd = main_output_old.shape[1] / main_output.shape[1]
-            lbd = 0.5
-            #loss = (1 - lbd) * loss
+            lbd = 2
+            #loss = 0.8 * loss
             kd_factor = lbd
 
             #tau = args.distillation_tau
@@ -206,7 +212,6 @@ def forward(samples, targets, model, teacher_model, criterion, lam, args):
                     log_target=True
             ) * (tau ** 2)
             
-            #_kd_loss = _KD_loss(logits_for_distil, main_output_old, tau)
             kd_loss += kd_factor * _kd_loss
         elif args.kd > 0.:
             _kd_loss = F.kl_div(
@@ -218,6 +223,32 @@ def forward(samples, targets, model, teacher_model, criterion, lam, args):
             kd_loss += args.kd * _kd_loss
 
     div_loss = None
+    #self distillation
+    if self_teacher_model is not None:
+        with torch.no_grad():
+            self_main_output_old = None
+            teacher_outputs = self_teacher_model(samples)
+
+        if isinstance(teacher_outputs, dict):
+            self_main_output_old = teacher_outputs['feature']
+        else:
+            self_main_output_old = teacher_outputs
+    
+        logits_for_distil = outputs['feature']
+        if args.auto_kd:
+            lbd = 2
+            kd_factor = lbd
+
+            tau = 2
+
+            _kd_loss = F.kl_div(
+                    F.log_softmax(logits_for_distil / tau, dim=1),
+                    F.log_softmax(self_main_output_old / tau, dim=1),
+                    reduction='mean',
+                    log_target=True
+            ) * (tau ** 2)
+            kd_loss += kd_factor * _kd_loss
+    
     if div_output is not None:
         # For the divergence heads, we need to create new targets.
         # If a class belong to old tasks, it will be 0.
@@ -270,7 +301,7 @@ def evaluate(data_loader, model, device, logger):
 
     # switch to evaluation mode
     model.eval()
-
+    t = 0
     for images, target, task_ids in metric_logger.log_every(data_loader, 10, header):
         images = images.to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
@@ -280,6 +311,14 @@ def evaluate(data_loader, model, device, logger):
             output = model(images)
             if isinstance(output, dict):
                 output = output['logits']
+            if t == 0:
+                t = 1
+                print(output[0])
+                a = [i for i in range(len(output[0]))]
+                #plt.figure(figsize = (14, 8))
+                #plt.bar(a,output.cpu().numpy().tolist()[0])
+                #plt.xticks(a, a)
+                #plt.savefig("label_{}".format(target.cpu().numpy().tolist()[0]))
             loss = criterion(output, target)
 
         acc1, acc5 = accuracy(output, target, topk=(1, min(5, output.shape[1])))
@@ -297,6 +336,63 @@ def evaluate(data_loader, model, device, logger):
           .format(top1=metric_logger.acc1, losses=metric_logger.loss))
 
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+
+@torch.no_grad()
+def visualize(data_loader,model,device, task_id):
+    criterion = torch.nn.CrossEntropyLoss()
+    metric_logger = utils.MetricLogger(delimiter="  ")
+    header = 'Test:'
+    # switch to evaluation mode
+    model.eval()
+    outputs = None
+    targets = None
+    t = 0
+    for images, target, task_ids in metric_logger.log_every(data_loader, 10, header):
+        images = images.to(device, non_blocking=True)
+        target = target.to(device, non_blocking=True)
+        if t == 0:
+            targets = target.cpu().numpy()
+        else:
+            np.append(targets, target.cpu().numpy())
+        # compute output
+        with torch.cuda.amp.autocast():
+            output = model(images)
+            if isinstance(output, dict):
+                output = output['feature']
+            if t == 0:
+                outputs = output.cpu().numpy()
+            else:
+                np.append(outputs, output.cpu().numpy())
+        t = 1
+    #outputs = np.stack(np.array(outputs), axis = 1)
+    #targets = np.stack(np.array(targets), axis = 1)
+    print(outputs.shape)
+    tsne = manifold.TSNE(n_components=2, init='pca', random_state=42).fit_transform(outputs)
+    x_min, x_max = tsne.min(0), tsne.max(0)
+    tsne_norm = (tsne - x_min) / (x_max - x_min)
+    colors = list(mcolors.TABLEAU_COLORS.keys())
+    for i in range(0, task_id + 1):
+        plt.figure()
+        #pos = []
+        #for j, target in enumerate(targets):
+        #    if target >= i * 10 and target < (i + 1)*10:
+        #        pos.append(j)
+
+        #pos = np.array(pos)
+        #feat = tsne_norm[pos]
+        #print(feat.shape)
+        for j in range(i * 10, (i + 1)*10):
+            position = (targets == j)
+            fea = tsne_norm[position]
+            plt.scatter(fea[:, 0], fea[:, 1], 1, color=mcolors.TABLEAU_COLORS[colors[j]], label=j)
+        plt.legend()
+        plt.savefig('figure_{}.jpg'.format(task_id))
+
+    
+
+
+
+        
 
 
 def eval_and_log(args, output_dir, model, model_without_ddp, optimizer, lr_scheduler,
@@ -339,7 +435,8 @@ def eval_and_log(args, output_dir, model, model_without_ddp, optimizer, lr_sched
         all_acc5 = [task_log['test_acc5'] for task_log in log_store['results'].values()]
         mean_acc5 = sum(all_acc5) / len(all_acc5)
 
-    if log_path is not None and utils.is_main_process():
+    #if log_path is not None and utils.is_main_process():
+    if False:
         with open(log_path, 'a+') as f:
             f.write(json.dumps({
                 'task': task_id,

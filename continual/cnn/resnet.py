@@ -186,7 +186,7 @@ class ResNet(AbstractCNN):
                                        dilate=replace_stride_with_dilation[2])
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
-        #self.fc = nn.Linear(512 * block.expansion, num_classes)
+        #self.fc = nn.Linear(512 , 1024)
         self.embed_dim = 512 * block.expansion
         #self.head = None
         self.text_features = None
@@ -258,18 +258,14 @@ class ResNet(AbstractCNN):
         x = self.maxpool(x)
 
         x = F.relu(self.layer1(x), inplace=True)
-        print(x.shape)
         x = F.relu(self.layer2(x), inplace=True)
-        print(x.shape)
         x = F.relu(self.layer3(x), inplace=True)
-        print(x.shape)
         x = F.relu(self.layer4(x), inplace=True)
 
-        print(x.shape)
         x = self.avgpool(x)
-        print(x.shape)
         x = torch.flatten(x, 1)
         x = self.norm(x)
+        #x = self.relu(self.fc(x))
         output['feature'] = x
         #x = torch.dot(x.contiguous().view(-1), self.text_features.contiguous().view(-1))
         x = torch.mm(x, self.text_features.T)

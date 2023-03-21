@@ -13,7 +13,7 @@ import warnings
 from pathlib import Path
 import yaml
 from continual.pod import _local_pod
-
+from continual.engine import visualize
 import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
@@ -413,13 +413,13 @@ def main(args):
     teacher_model.freeze()
     teacher_model.eval()
     #teacher_model = None
-    
+    self_teacher_model = None 
      #class_order = dataset_train.class_order
-    categories = [{'name': item, 'id': idx+1,} for idx, item in enumerate(category_names)]
+    categories = [{'name': item, 'id': idx+1,} for idx, item in enumerate(category_names[:100])]
     category_indices = {cat['id']: cat for cat in categories}
     # ----------------------------------------------------------------------
     # text_feature
-    text_features = teacher_model.build_text_embedding(categories[0:10])
+    text_features = teacher_model.build_text_embedding(categories)
     #print (next (teacher_model.parameters ()).device)
     output_dir = Path(args.output_dir)
 
@@ -459,7 +459,7 @@ def main(args):
         # ----------------------------------------------------------------------
         # Data
         
-        dataset_val = scenario_val[:task_id + 1]
+        dataset_val = scenario_val[0:task_id+1]
         if args.validation > 0.:  # use validation split instead of test
             if task_id == 0:
                 dataset_train, dataset_val = split_train_val(dataset_train, args.validation)
@@ -493,10 +493,10 @@ def main(args):
 
         # ----------------------------------------------------------------------
         # Initializing teacher model from previous task
-        #if use_distillation and task_id > 0:
-            #teacher_model = copy.deepcopy(model_without_ddp)
-            #teacher_model.freeze(['all'])
-            #teacher_model.eval()
+        if use_distillation and task_id > 0:
+            self_teacher_model = copy.deepcopy(model_without_ddp)
+            self_teacher_model.freeze(['all'])
+            self_teacher_model.eval()
         # ----------------------------------------------------------------------
 
         # ----------------------------------------------------------------------
@@ -522,7 +522,11 @@ def main(args):
         # Data
         loader_train, loader_val = factory.get_loaders(dataset_train, dataset_val, args)
         model_without_ddp.text_features = torch.Tensor(text_features[:(task_id+1)*10]).to(device)
+        teacher_model.text_encoding = torch.Tensor(text_features[:(task_id+1)*10]).to(device)
+        teacher_model.freeze()
+        teacher_model.eval()
         model_without_ddp.to(device)
+        #visualize(loader_val, model_without_ddp, device, task_id)
         # ----------------------------------------------------------------------
         # Learning rate and optimizer
         if task_id > 0 and args.incremental_batch_size:
@@ -601,6 +605,7 @@ def main(args):
                 args.clip_grad, mixup_fn,
                 debug=args.debug,
                 args=args,
+                self_teacher_model=self_teacher_model,
                 teacher_model=teacher_model,
                 model_without_ddp=model_without_ddp,
                 sam=sam,
@@ -744,6 +749,7 @@ def main(args):
                     args.clip_grad, mixup_fn,
                     debug=args.debug,
                     args=args,
+                    self_teacher_model=self_teacher_model,
                     teacher_model=teacher_model if args.finetuning_teacher else None,
                     model_without_ddp=model_without_ddp,
                     pod=args.pod if task_id > 0 else None, pod_scales=args.pod_scales
@@ -770,6 +776,7 @@ def main(args):
 
         nb_classes += args.increment
 
+    
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print('Training time {}'.format(total_time_str))

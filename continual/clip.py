@@ -122,6 +122,7 @@ def processed_name(name, rm_dot=False):
 def load_clip_to_cpu():
     #backbone_name = cfg.MODEL.BACKBONE.NAME
     url = clip._MODELS["ViT-B/16"]
+    #url = clip._MODELS["RN50"]
     model_path = clip._download(url)
     print(model_path) 
     try:
@@ -166,7 +167,7 @@ class CustomCLIP(nn.Module):
         self.text_encoder = clip_model.encode_text
         self.logit_scale = clip_model.logit_scale
         self.dtype = clip_model.dtype
-
+        self.text_encoding = None
             
     def forward(self, image):
         image_features = self.image_encoder(image.type(self.dtype))
@@ -177,9 +178,10 @@ class CustomCLIP(nn.Module):
         image_features = image_features / image_features.norm(dim=-1, keepdim=True)
         #text_features = text_features / text_features.norm(dim=-1, keepdim=True)
 
-        #logit_scale = self.logit_scale.exp()
-        #logits = logit_scale * image_features @ text_features.t()
-        return image_features
+        logit_scale = self.logit_scale.exp()
+        logits = logit_scale * image_features @ self.text_encoding.t()
+        
+        return logits
         #return logits
 
     def freeze(self):
