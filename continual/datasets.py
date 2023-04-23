@@ -138,7 +138,7 @@ def build_transform(is_train, args):
                 transform.transforms[0] = transforms.RandomCrop(
                     args.input_size, padding=4)
 
-            if args.input_size == 32 and args.data_set == 'CIFAR':
+            if args.input_size == 224 and args.data_set == 'CIFAR':
                 transform.transforms[-1] = transforms.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761))
             return transform
 
@@ -151,7 +151,7 @@ def build_transform(is_train, args):
             t.append(transforms.CenterCrop(args.input_size))
 
         t.append(transforms.ToTensor())
-        if args.input_size == 32 and args.data_set == 'CIFAR':
+        if args.input_size == 224 and args.data_set == 'CIFAR':
             # Normalization values for CIFAR100
             t.append(transforms.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)))
         else:

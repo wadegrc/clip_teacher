@@ -34,8 +34,11 @@ from continual.datasets import build_dataset
 from continual.engine import eval_and_log, train_one_epoch
 from continual.losses import bce_with_logits, soft_bce_with_logits
 from continual.clip import load_clip_to_cpu 
+from torchstat import stat
+from continual.cnn.predictor import _predictor
 warnings.filterwarnings("ignore")
-
+#import sys
+#sys.path.append("/home/grc/paper_code/clip_teacher/continual/")
 
 def get_args_parser():
     parser = argparse.ArgumentParser('DyTox training and evaluation script', add_help=False)
@@ -350,7 +353,9 @@ def main(args):
     #    model.embed_dim, args.nb_classes, args.initial_increment,
     #    args.increment, len(scenario_train)
     #)
+    predictor = _predictor()
     model.to(device)
+    predictor.to(device)
     # model will be on multiple GPUs, while model_without_ddp on a single GPU, but
     # it's actually the same model.
     model_without_ddp = model
@@ -451,6 +456,8 @@ def main(args):
         #teacher_model.to(device)
         #teacher_model.freeze()
         #teacher_model.eval()
+        if task_id == 1:
+            predictor.freeze(['all'])
         if args.max_task == task_id:
             print(f"Stop training because of max task")
             break
@@ -521,6 +528,8 @@ def main(args):
         # ----------------------------------------------------------------------
         # Data
         loader_train, loader_val = factory.get_loaders(dataset_train, dataset_val, args)
+        #model_without_ddp.text_features = torch.nn.Linear(512, (task_id + 1)*10, bias = False).to(device)
+        #model_without_ddp.text_features.weight.data = torch.Tensor(text_features[:(task_id+1)*10]).to(device)
         model_without_ddp.text_features = torch.Tensor(text_features[:(task_id+1)*10]).to(device)
         teacher_model.text_encoding = torch.Tensor(text_features[:(task_id+1)*10]).to(device)
         teacher_model.freeze()
@@ -539,7 +548,13 @@ def main(args):
 
         args.lr = linear_scaled_lr
         optimizer = create_optimizer(args, model_without_ddp)
+        pre_args = copy.deepcopy(args)
+        pre_args.lr = 0.001
+        pre_args.weight_decay = 0.00001
+        pre_args.momentum = 0.9
+        pre_optimizer = create_optimizer(pre_args, predictor)
         lr_scheduler, _ = create_scheduler(args, optimizer)
+        pre_lr_scheduler, _ = create_scheduler(pre_args, pre_optimizer)
         # ----------------------------------------------------------------------
 
         if mixup_active:
@@ -601,12 +616,13 @@ def main(args):
 
             train_stats = train_one_epoch(
                 model, criterion, loader_train,
-                optimizer, device, epoch, task_id, loss_scaler,
+                optimizer,pre_optimizer, device, epoch, task_id, loss_scaler,
                 args.clip_grad, mixup_fn,
                 debug=args.debug,
                 args=args,
                 self_teacher_model=self_teacher_model,
                 teacher_model=teacher_model,
+                predictor = predictor,
                 model_without_ddp=model_without_ddp,
                 sam=sam,
                 loader_memory=loader_memory,
@@ -614,6 +630,7 @@ def main(args):
             )
 
             lr_scheduler.step(epoch)
+            pre_lr_scheduler.step(epoch)
 
             if args.save_every_epoch is not None and epoch % args.save_every_epoch == 0:
                 if os.path.isdir(args.resume):
@@ -637,7 +654,7 @@ def main(args):
 
             if args.eval_every and (epoch % args.eval_every  == 0 or (args.finetuning and epoch == epochs - 1)):
                 eval_and_log(
-                    args, output_dir, model, model_without_ddp, optimizer, lr_scheduler,
+                    args, output_dir, model, teacher_model, predictor, model_without_ddp, optimizer, lr_scheduler,
                     epoch, task_id, loss_scaler, max_accuracy,
                     [], n_parameters, device, loader_val, train_stats, None, long_log_path,
                     logger, model_without_ddp.epoch_log()
@@ -745,19 +762,20 @@ def main(args):
                     loader_finetune.sampler.set_epoch(epoch)
                 train_stats = train_one_epoch(
                     model, criterion, loader_finetune,
-                    optimizer, device, epoch, task_id, loss_scaler,
+                    optimizer,pre_optimizer, device, epoch, task_id, loss_scaler,
                     args.clip_grad, mixup_fn,
                     debug=args.debug,
                     args=args,
                     self_teacher_model=self_teacher_model,
                     teacher_model=teacher_model if args.finetuning_teacher else None,
+                    predictor = predictor,
                     model_without_ddp=model_without_ddp,
                     pod=args.pod if task_id > 0 else None, pod_scales=args.pod_scales
                 )
 
                 if epoch % 10 == 0 or epoch == args.finetuning_epochs - 1:
                     eval_and_log(
-                        args, output_dir, model, model_without_ddp, optimizer, lr_scheduler,
+                        args, output_dir, model, teacher_model, predictor, model_without_ddp, optimizer, lr_scheduler,
                         epoch, task_id, loss_scaler, max_accuracy,
                         [], n_parameters, device, loader_val, train_stats, None, long_log_path,
                         logger, model_without_ddp.epoch_log()
@@ -767,7 +785,7 @@ def main(args):
             model_without_ddp.end_finetuning()
 
         eval_and_log(
-            args, output_dir, model, model_without_ddp, optimizer, lr_scheduler,
+            args, output_dir, model,teacher_model,predictor, model_without_ddp, optimizer, lr_scheduler,
             epoch, task_id, loss_scaler, max_accuracy,
             accuracy_list, n_parameters, device, loader_val, train_stats, log_store, log_path,
             logger, model_without_ddp.epoch_log(), skipped_task

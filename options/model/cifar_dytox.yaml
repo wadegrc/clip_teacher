@@ -21,7 +21,7 @@ eval_every: 10
 weight_decay: 0.00001
 batch_size: 32
 incremental_batch_size: 32
-incremental_lr: 0.01
+incremental_lr: 0.03
 rehearsal: icarl_all
 
 # Knowledge Distillation
